@@ -2,7 +2,7 @@
 
 A short quiz funnel for a "Free Marketing Audit" offer. Someone answers three quick questions, leaves their contact info, and that lead gets tracked and saved automatically — with nothing lost even if something goes wrong along the way.
 
-**Live site:** _add your Vercel link here once deployed_
+**Live site:** https://lexhive-funnel-phi.vercel.app
 **Automation export:** [automation/lexhive-lead-intake.json](automation/lexhive-lead-intake.json)
 
 ## What this actually does

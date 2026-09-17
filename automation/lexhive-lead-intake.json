@@ -1,0 +1,271 @@
+{
+  "name": "LexHive Lead Intake",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Why event_id shows up everywhere in this workflow\nThe React app already generates one `event_id` per visitor and sends it in the webhook payload. Every node below just carries that same ID forward — to Meta's API, and to the Airtable row.\n\nThat's the entire deduplication mechanism: Meta sees a browser Pixel event and a server CAPI event with the *same* event_id and counts them as ONE lead, not two. If we generated a new ID here instead, every lead would get double-counted.",
+        "height": 260,
+        "width": 320
+      },
+      "id": "note-event-id",
+      "name": "Note - event_id dedup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-200, -120]
+    },
+    {
+      "parameters": {
+        "content": "## Why Upsert, not Insert\nMatched on `event_id`. If n8n or the browser ever retries this webhook (flaky network, timeout), this node overwrites the same Airtable row instead of creating a second lead.\n\nThis is what makes a retry safe: worst case a row gets written twice with identical data, never duplicated.",
+        "height": 220,
+        "width": 300
+      },
+      "id": "note-upsert",
+      "name": "Note - upsert safety",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [760, -120]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook",
+      "name": "Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-200, 200],
+      "webhookId": "lexhive-lead-intake"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// The only hand-written code in this workflow. Everything else uses n8n's\n// built-in nodes so the logic stays visible/inspectable without reading code.\n//\n// WHY this step exists: Meta's Conversions API requires email/phone/name to\n// arrive as lowercase, trimmed, SHA-256 hashes - never plain text. Hashing\n// happens here, once, right after the lead lands, so no raw PII travels\n// further than it has to. This is also the last point where the raw request\n// headers (for client_ip_address) are still available, before the item gets\n// reshaped down to just the body fields.\nconst crypto = require('crypto');\n\nconst body = $json.body ?? $json;\nconst headers = $json.headers ?? {};\n\nconst email = (body.contact?.email || '').toLowerCase().trim();\nconst phone = (body.contact?.phone || '').replace(/[^0-9]/g, '');\n\nconst fullName = (body.contact?.name || '').trim().toLowerCase();\nconst [firstName = '', ...rest] = fullName.split(/\\s+/);\nconst lastName = rest.join(' ');\n\n// Prefer a real upstream-proxy IP header over x-forwarded-for's leftmost\n// (client) entry, since x-forwarded-for can be spoofed by the client itself\n// if no trusted proxy strips/overwrites it first.\nconst clientIp =\n  headers['cf-connecting-ip'] ||\n  headers['x-real-ip'] ||\n  (headers['x-forwarded-for'] || '').split(',')[0].trim() ||\n  undefined;\n\nreturn {\n  ...body,\n  hashedEmail: crypto.createHash('sha256').update(email).digest('hex'),\n  hashedPhone: crypto.createHash('sha256').update(phone).digest('hex'),\n  hashedFirstName: firstName ? crypto.createHash('sha256').update(firstName).digest('hex') : undefined,\n  hashedLastName: lastName ? crypto.createHash('sha256').update(lastName).digest('hex') : undefined,\n  clientIp,\n};\n"
+      },
+      "id": "node-normalize-hash",
+      "name": "Normalize + Hash PII",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [40, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/YOUR_PIXEL_ID/events",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ data: [ { event_name: \"Lead\", event_time: Math.floor(new Date($json.submitted_at).getTime() / 1000), event_id: $json.event_id, action_source: \"website\", event_source_url: $json.tracking.page_url, user_data: { em: [$json.hashedEmail], ph: [$json.hashedPhone], fn: $json.hashedFirstName ? [$json.hashedFirstName] : undefined, ln: $json.hashedLastName ? [$json.hashedLastName] : undefined, fbp: $json.tracking.fbp || undefined, fbc: $json.tracking.fbc || undefined, client_ip_address: $json.clientIp || undefined, client_user_agent: $json.tracking.user_agent }, custom_data: { runs_ads: $json.answers.runs_ads, monthly_budget: $json.answers.monthly_budget, urgency: $json.answers.urgency } } ] }) }}",
+        "options": {}
+      },
+      "id": "node-meta-capi",
+      "name": "Send to Meta CAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 200],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "",
+          "name": "Meta CAPI Access Token"
+        }
+      },
+      "notesInFlow": true,
+      "notes": "Replace YOUR_PIXEL_ID in the URL once the Meta Pixel exists. continueOnFail is ON deliberately: a Meta outage should never lose a lead - it should still fall through to Airtable, just flagged as unsynced."
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": true,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-status",
+              "name": "metaSyncStatus",
+              "type": "string",
+              "value": "={{ $json.error ? 'Failed' : 'Success' }}"
+            },
+            {
+              "id": "assign-error",
+              "name": "metaSyncError",
+              "type": "string",
+              "value": "={{ $json.error ? ($json.error.message || String($json.error)) : '' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-record-meta-result",
+      "name": "Record Meta Sync Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [520, 200]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": {
+          "__rl": true,
+          "value": "appiQwFmGBTmcHdnH",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblRF6312ynu4t3Sq",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "event_id": "={{ $('Normalize + Hash PII').item.json.event_id }}",
+            "Name": "={{ $('Normalize + Hash PII').item.json.contact.name }}",
+            "Business": "={{ $('Normalize + Hash PII').item.json.contact.business }}",
+            "Email": "={{ $('Normalize + Hash PII').item.json.contact.email }}",
+            "Phone": "={{ $('Normalize + Hash PII').item.json.contact.phone }}",
+            "Runs Ads": "={{ $('Normalize + Hash PII').item.json.answers.runs_ads }}",
+            "Monthly Budget": "={{ $('Normalize + Hash PII').item.json.answers.monthly_budget }}",
+            "Urgency": "={{ $('Normalize + Hash PII').item.json.answers.urgency }}",
+            "Submitted At": "={{ $('Normalize + Hash PII').item.json.submitted_at }}",
+            "Page URL": "={{ $('Normalize + Hash PII').item.json.tracking.page_url }}",
+            "Meta Sync Status": "={{ $json.metaSyncStatus }}",
+            "Meta Sync Error": "={{ $json.metaSyncError }}"
+          },
+          "matchingColumns": ["event_id"]
+        },
+        "options": {}
+      },
+      "id": "node-airtable-upsert",
+      "name": "Upsert Lead to Airtable",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [760, 200],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": true,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-write-ok",
+              "name": "writeOk",
+              "type": "boolean",
+              "value": "={{ !!$json.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-compute-write-result",
+      "name": "Compute Write Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [880, 200],
+      "notesInFlow": true,
+      "notes": "Pre-computes a real boolean via ternary, same pattern as 'Record Meta Sync Result'. The IF node's built-in String isEmpty/isNotEmpty operators were unreliable evaluating $json.error / $json.id directly in this n8n instance, even against confirmed non-empty data - see ISSUE.md."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-airtable-ok",
+              "leftValue": "={{ $json.writeOk }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-airtable-ok",
+      "name": "Airtable Write OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: \"ok\" } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "node-respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1360, 100]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: \"error\", detail: \"Could not save lead. Please retry.\" } }}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "node-respond-error",
+      "name": "Respond Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1360, 320]
+    }
+  ],
+  "connections": {
+    "Lead Webhook": {
+      "main": [[{ "node": "Normalize + Hash PII", "type": "main", "index": 0 }]]
+    },
+    "Normalize + Hash PII": {
+      "main": [[{ "node": "Send to Meta CAPI", "type": "main", "index": 0 }]]
+    },
+    "Send to Meta CAPI": {
+      "main": [[{ "node": "Record Meta Sync Result", "type": "main", "index": 0 }]]
+    },
+    "Record Meta Sync Result": {
+      "main": [[{ "node": "Upsert Lead to Airtable", "type": "main", "index": 0 }]]
+    },
+    "Upsert Lead to Airtable": {
+      "main": [[{ "node": "Compute Write Result", "type": "main", "index": 0 }]]
+    },
+    "Compute Write Result": {
+      "main": [[{ "node": "Airtable Write OK?", "type": "main", "index": 0 }]]
+    },
+    "Airtable Write OK?": {
+      "main": [
+        [{ "node": "Respond Success", "type": "main", "index": 0 }],
+        [{ "node": "Respond Error", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "instanceId": "lexhive-funnel-assessment"
+  }
+}

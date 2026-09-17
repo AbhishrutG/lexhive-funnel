@@ -1,5 +1,5 @@
 {
-  "name": "LexHive Lead Intake",
+  "name": "LexHive Lead Intake Production",
   "nodes": [
     {
       "parameters": {
@@ -7,11 +7,14 @@
         "height": 260,
         "width": 320
       },
-      "id": "note-event-id",
+      "id": "9540d798-5488-42aa-9465-bea55f8745db",
       "name": "Note - event_id dedup",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [-200, -120]
+      "position": [
+        -80,
+        16
+      ]
     },
     {
       "parameters": {
@@ -19,11 +22,14 @@
         "height": 220,
         "width": 300
       },
-      "id": "note-upsert",
+      "id": "9e2493c9-83e4-46e6-9a24-75fc7f3ce35f",
       "name": "Note - upsert safety",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [760, -120]
+      "position": [
+        880,
+        16
+      ]
     },
     {
       "parameters": {
@@ -32,56 +38,62 @@
         "responseMode": "responseNode",
         "options": {}
       },
-      "id": "node-webhook",
+      "id": "6152bd18-4c60-4249-9d89-8280f91147c6",
       "name": "Lead Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [-200, 200],
+      "position": [
+        -80,
+        336
+      ],
       "webhookId": "lexhive-lead-intake"
     },
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "language": "javaScript",
-        "jsCode": "// The only hand-written code in this workflow. Everything else uses n8n's\n// built-in nodes so the logic stays visible/inspectable without reading code.\n//\n// WHY this step exists: Meta's Conversions API requires email/phone/name to\n// arrive as lowercase, trimmed, SHA-256 hashes - never plain text. Hashing\n// happens here, once, right after the lead lands, so no raw PII travels\n// further than it has to. This is also the last point where the raw request\n// headers (for client_ip_address) are still available, before the item gets\n// reshaped down to just the body fields.\nconst crypto = require('crypto');\n\nconst body = $json.body ?? $json;\nconst headers = $json.headers ?? {};\n\nconst email = (body.contact?.email || '').toLowerCase().trim();\nconst phone = (body.contact?.phone || '').replace(/[^0-9]/g, '');\n\nconst fullName = (body.contact?.name || '').trim().toLowerCase();\nconst [firstName = '', ...rest] = fullName.split(/\\s+/);\nconst lastName = rest.join(' ');\n\n// Prefer a real upstream-proxy IP header over x-forwarded-for's leftmost\n// (client) entry, since x-forwarded-for can be spoofed by the client itself\n// if no trusted proxy strips/overwrites it first.\nconst clientIp =\n  headers['cf-connecting-ip'] ||\n  headers['x-real-ip'] ||\n  (headers['x-forwarded-for'] || '').split(',')[0].trim() ||\n  undefined;\n\nreturn {\n  ...body,\n  hashedEmail: crypto.createHash('sha256').update(email).digest('hex'),\n  hashedPhone: crypto.createHash('sha256').update(phone).digest('hex'),\n  hashedFirstName: firstName ? crypto.createHash('sha256').update(firstName).digest('hex') : undefined,\n  hashedLastName: lastName ? crypto.createHash('sha256').update(lastName).digest('hex') : undefined,\n  clientIp,\n};\n"
+        "jsCode": "// The only hand-written code in this workflow. Everything else uses n8n's\n// built-in nodes so the logic stays visible/inspectable without reading code.\n//\n// WHY this step exists: Meta's Conversions API requires email/phone/name to\n// arrive as lowercase, trimmed, SHA-256 hashes - never plain text. Hashing\n// happens here, once, right after the lead lands, so no raw PII travels\n// further than it has to. This is also the last point where the raw request\n// headers (for client_ip_address) are still available, before the item gets\n// reshaped down to just the body fields.\nconst crypto = require('crypto');\n\nconst body = $json.body ?? $json;\nconst headers = $json.headers ?? {};\n\nconst email = (body.contact?.email || '').toLowerCase().trim();\nconst phone = (body.contact?.phone || '').replace(/[^0-9]/g, '');\n\nconst fullName = (body.contact?.name || '').trim().toLowerCase();\nconst [firstName = '', ...rest] = fullName.split(/\\s+/);\nconst lastName = rest.join(' ');\n\n// Prefer a real upstream-proxy IP header over x-forwarded-for's leftmost\n// (client) entry, since x-forwarded-for can be spoofed by the client itself\n// if no trusted proxy strips/overwrites it first.\nconst clientIp =\n  headers['cf-connecting-ip'] ||\n  headers['x-real-ip'] ||\n  (headers['x-forwarded-for'] || '').split(',')[0].trim() ||\n  undefined;\n\nreturn {\n  ...body,\n  hashedEmail: crypto.createHash('sha256').update(email).digest('hex'),\n  hashedPhone: crypto.createHash('sha256').update(phone).digest('hex'),\n  hashedFirstName: firstName ? crypto.createHash('sha256').update(firstName).digest('hex') : undefined,\n  hashedLastName: lastName ? crypto.createHash('sha256').update(lastName).digest('hex') : undefined,\n  clientIp,\n};"
       },
-      "id": "node-normalize-hash",
+      "id": "05256703-abc5-443f-9350-1cdf9c42656c",
       "name": "Normalize + Hash PII",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [40, 200]
+      "position": [
+        160,
+        336
+      ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "https://graph.facebook.com/v19.0/YOUR_PIXEL_ID/events",
+        "url": "https://graph.facebook.com/v19.0/2162676567929174/events",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpQueryAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ data: [ { event_name: \"Lead\", event_time: Math.floor(new Date($json.submitted_at).getTime() / 1000), event_id: $json.event_id, action_source: \"website\", event_source_url: $json.tracking.page_url, user_data: { em: [$json.hashedEmail], ph: [$json.hashedPhone], fn: $json.hashedFirstName ? [$json.hashedFirstName] : undefined, ln: $json.hashedLastName ? [$json.hashedLastName] : undefined, fbp: $json.tracking.fbp || undefined, fbc: $json.tracking.fbc || undefined, client_ip_address: $json.clientIp || undefined, client_user_agent: $json.tracking.user_agent }, custom_data: { runs_ads: $json.answers.runs_ads, monthly_budget: $json.answers.monthly_budget, urgency: $json.answers.urgency } } ] }) }}",
+        "jsonBody": "={{ JSON.stringify({ data: [ { event_name: \"Lead\", event_time: Math.floor(new Date($json.submitted_at).getTime() / 1000), event_id: $json.event_id, action_source: \"website\", event_source_url: $json.tracking.page_url, user_data: { em: [$json.hashedEmail], ph: [$json.hashedPhone], fn: $json.hashedFirstName ? [$json.hashedFirstName] : undefined, ln: $json.hashedLastName ? [$json.hashedLastName] : undefined, fbp: $json.tracking.fbp || undefined, fbc: $json.tracking.fbc || undefined, client_ip_address: $json.clientIp || undefined, client_user_agent: $json.tracking.user_agent }, custom_data: { runs_ads: $json.answers.runs_ads, monthly_budget: $json.answers.monthly_budget, urgency: $json.answers.urgency } } ] }) }}\n",
         "options": {}
       },
-      "id": "node-meta-capi",
+      "id": "5b9fe539-2f84-468a-bb08-5ee37e88f3f7",
       "name": "Send to Meta CAPI",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [280, 200],
-      "continueOnFail": true,
-      "onError": "continueRegularOutput",
+      "position": [
+        400,
+        336
+      ],
+      "notesInFlow": true,
       "credentials": {
         "httpQueryAuth": {
           "id": "",
-          "name": "Meta CAPI Access Token"
+          "name": "Query Auth account"
         }
       },
-      "notesInFlow": true,
-      "notes": "Replace YOUR_PIXEL_ID in the URL once the Meta Pixel exists. continueOnFail is ON deliberately: a Meta outage should never lose a lead - it should still fall through to Airtable, just flagged as unsynced."
+      "continueOnFail": true,
+      "onError": "continueRegularOutput",
+      "notes": "continueOnFail is ON deliberately: a Meta outage should never lose a lead - it should still fall through to Airtable, just flagged as unsynced."
     },
     {
       "parameters": {
-        "mode": "manual",
-        "includeOtherFields": true,
         "assignments": {
           "assignments": [
             {
@@ -98,16 +110,21 @@
             }
           ]
         },
+        "includeOtherFields": true,
         "options": {}
       },
-      "id": "node-record-meta-result",
+      "id": "c2d4329a-3c1d-4a5f-95ba-aa8532532bc9",
       "name": "Record Meta Sync Result",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [520, 200]
+      "position": [
+        640,
+        336
+      ]
     },
     {
       "parameters": {
+        "authentication": "airtableOAuth2Api",
         "operation": "upsert",
         "base": {
           "__rl": true,
@@ -135,28 +152,233 @@
             "Meta Sync Status": "={{ $json.metaSyncStatus }}",
             "Meta Sync Error": "={{ $json.metaSyncError }}"
           },
-          "matchingColumns": ["event_id"]
+          "matchingColumns": [
+            "event_id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "event_id",
+              "displayName": "event_id",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Business",
+              "displayName": "Business",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Phone",
+              "displayName": "Phone",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Runs Ads",
+              "displayName": "Runs Ads",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Yes, actively",
+                  "value": "Yes, actively"
+                },
+                {
+                  "name": "Used to, not anymore",
+                  "value": "Used to, not anymore"
+                },
+                {
+                  "name": "Never tried it",
+                  "value": "Never tried it"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Monthly Budget",
+              "displayName": "Monthly Budget",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Under $500",
+                  "value": "Under $500"
+                },
+                {
+                  "name": "$500 - $2,000",
+                  "value": "$500 - $2,000"
+                },
+                {
+                  "name": "$2,000 - $10,000",
+                  "value": "$2,000 - $10,000"
+                },
+                {
+                  "name": "$10,000+",
+                  "value": "$10,000+"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Urgency",
+              "displayName": "Urgency",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Immediately",
+                  "value": "Immediately"
+                },
+                {
+                  "name": "Within 1-3 months",
+                  "value": "Within 1-3 months"
+                },
+                {
+                  "name": "Just exploring options",
+                  "value": "Just exploring options"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Submitted At",
+              "displayName": "Submitted At",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "dateTime",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Page URL",
+              "displayName": "Page URL",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Meta Sync Status",
+              "displayName": "Meta Sync Status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Success",
+                  "value": "Success"
+                },
+                {
+                  "name": "Failed",
+                  "value": "Failed"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Meta Sync Error",
+              "displayName": "Meta Sync Error",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
         },
         "options": {}
       },
-      "id": "node-airtable-upsert",
+      "id": "96854bf3-1ad4-4d9f-b057-5dd7a55caafb",
       "name": "Upsert Lead to Airtable",
       "type": "n8n-nodes-base.airtable",
       "typeVersion": 2.1,
-      "position": [760, 200],
-      "continueOnFail": true,
-      "onError": "continueRegularOutput",
+      "position": [
+        832,
+        336
+      ],
       "credentials": {
-        "airtableTokenApi": {
+        "airtableOAuth2Api": {
           "id": "",
-          "name": "Airtable Personal Access Token account"
+          "name": "Airtable account"
         }
-      }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
-        "mode": "manual",
-        "includeOtherFields": true,
         "assignments": {
           "assignments": [
             {
@@ -167,13 +389,17 @@
             }
           ]
         },
+        "includeOtherFields": true,
         "options": {}
       },
-      "id": "node-compute-write-result",
+      "id": "22b33eac-7857-40b5-affe-8fe363fd6bc8",
       "name": "Compute Write Result",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [880, 200],
+      "position": [
+        1040,
+        336
+      ],
       "notesInFlow": true,
       "notes": "Pre-computes a real boolean via ternary, same pattern as 'Record Meta Sync Result'. The IF node's built-in String isEmpty/isNotEmpty operators were unreliable evaluating $json.error / $json.id directly in this n8n instance, even against confirmed non-empty data - see ISSUE.md."
     },
@@ -183,7 +409,8 @@
           "options": {
             "caseSensitive": true,
             "leftValue": "",
-            "typeValidation": "loose"
+            "typeValidation": "loose",
+            "version": 1
           },
           "conditions": [
             {
@@ -201,11 +428,14 @@
         },
         "options": {}
       },
-      "id": "node-airtable-ok",
+      "id": "bf42bded-0e45-495e-9cc9-1a4469e7363b",
       "name": "Airtable Write OK?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1120, 200]
+      "position": [
+        1248,
+        336
+      ]
     },
     {
       "parameters": {
@@ -215,11 +445,14 @@
           "responseCode": 200
         }
       },
-      "id": "node-respond-success",
+      "id": "b1666b16-c4d9-4280-8130-99046c5398af",
       "name": "Respond Success",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1360, 100]
+      "position": [
+        1488,
+        240
+      ]
     },
     {
       "parameters": {
@@ -229,43 +462,114 @@
           "responseCode": 500
         }
       },
-      "id": "node-respond-error",
+      "id": "eb7ae96e-2364-4b04-bd90-f7bcdd617d3a",
       "name": "Respond Error",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1360, 320]
+      "position": [
+        1488,
+        464
+      ]
     }
   ],
+  "pinData": {},
   "connections": {
     "Lead Webhook": {
-      "main": [[{ "node": "Normalize + Hash PII", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Normalize + Hash PII",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Normalize + Hash PII": {
-      "main": [[{ "node": "Send to Meta CAPI", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Send to Meta CAPI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Send to Meta CAPI": {
-      "main": [[{ "node": "Record Meta Sync Result", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Record Meta Sync Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Record Meta Sync Result": {
-      "main": [[{ "node": "Upsert Lead to Airtable", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Upsert Lead to Airtable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Upsert Lead to Airtable": {
-      "main": [[{ "node": "Compute Write Result", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Compute Write Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Compute Write Result": {
-      "main": [[{ "node": "Airtable Write OK?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Airtable Write OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Airtable Write OK?": {
       "main": [
-        [{ "node": "Respond Success", "type": "main", "index": 0 }],
-        [{ "node": "Respond Error", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
+  "active": true,
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "binaryMode": "separate"
   },
+  "versionId": "9008cb98-a7d1-4100-a63d-3d1a1c643f89",
   "meta": {
+    "templateCredsSetupCompleted": true,
     "instanceId": "lexhive-funnel-assessment"
-  }
+  },
+  "nodeGroups": [],
+  "id": "O2oGGBOFLW6rlyXA",
+  "tags": []
 }
